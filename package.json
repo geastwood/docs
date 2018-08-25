@@ -58,7 +58,7 @@
   "lint-staged": {
     "*.js": [
       "eslint",
-      "prettier --write --no-semi --single-quote",
+      "prettier --write --no-semi --single-quote --tab-width=2 --trailing-comma=none",
       "git add"
     ]
   },

@@ -1,0 +1,144 @@
+import { withRouter } from 'next/router'
+import WithMDX from '../../../lib/with-mdx'
+import Image from '../../../components/image'
+import { TerminalInput } from "../../../components/text/terminal"
+
+export const page = {
+title: 'Promotion/Reattachment',
+date: '24 Auguest 2018',
+authors: [],
+editUrl: 'pages/introduction/tangle/promotion-reattachment.mdx',
+}
+
+export default withRouter(props => WithMDX(props, page))
+
+## Introduction
+
+In IOTA, promotion and reattachment refers to the action can be taken by a client (e.g.
+wallet user) to either
+promote or reattach a pending transaction to the Tangle in order to increase the
+probability to get the transaction approved.
+
+Although both promotion and reattachment achieve the same end result, they are 
+inherently very different approaches and each has its own applicative use cases.
+
+## Reattachment
+
+Reattaching a transaction means to create a new transaction with the same signed bundle as the already submitted (yet pending) transaction, 
+and attach this new transaction to the Tangle by **reselecting the tips** and **redoing the proof of work (PoW)**.
+_Figure 1_ represents the reattachment of a transaction on the Tangle, where **A** is the original transaction and **A'** is the reattachment.
+
+<Image
+src={`/static/docs/promotion_reattachment/reattachment.svg`}
+width="100"
+height="100"
+caption="Figure 1: Reattachment of a transaction on the Tangle"
+/>
+
+The transaction **A** hasn't been confirmed for a certain amount of time, e.g.
+30min, its chance of being approved becomes less likely over time, since 
+[Markov Chain Monte Carlo (MCMC)](https://en.wikipedia.org/wiki/Markov_chain_Monte_Carlo) walk
+biased towards transactions with more cumulative weight, tips referencing old
+transaction become less possible to be selected. Under such a scenario, we can
+reattach the transaction **A'** by redoing PoW and reselecting the tips.
+
+It is fairly obvious to conclude that by reattaching the same transaction multiple
+times, it creates a **double-spending situation**. This
+can be confirmed by comparing anatomy of two transaction bundles. The original
+transaction (**A**) and reattached transaction (**A'**) only differ in
+following fields:
+
+* _hash_ => **A'** becomes a tip, and this donates it
+* _trunkTransaction_ => after reattached **A'**, this donates one of the tips
+* _branchTransaction_ => after reattached **A'**, this donates the other tip
+* _attachmentTimestamp_ => timestamp of the attachment
+* _nouce_ => donates PoW is re-done
+
+The rest of fields in the bundle such as _address_, _value_ in both **A** and **A'** remains 
+the same. This implies if **A** is "Alice sends 10 IOTAs to Bob",
+**A'** represents the same intention. Therefore attaching **A'**
+creates a **double-spending situation**. Double-spending can
+be very well handled by the Tangle, i.e. if **A'** get confirmed by Tangle, **A** will never be
+approved.
+
+> Note: Worth pointing out, that _signitureFragment_ remains the same after the reattachment. This implies that
+reattaching a bundle **does not** make the outgoing address unsafe.
+
+In order to reattach a pending transaction, you can call 
+_[replayBundle](https://github.com/iotaledger/iota.js/tree/master#replaybundle)_ method from javascript library. 
+
+```javascript
+iota.api.replayBundle(tail, depth, minWeightMagnitude [, callback])
+```
+
+**Reattaching a transaction should be used with caution**. Due to its nature of
+creating multiple transactions with same payload on the Tangle, eventually only
+one of them can be confirmed, the rest become invalid. If transactions from
+others reference those invalid transactions, their transactions won't be
+able to get approved. The reason lies in the tip selection phase, MCMC walk will check the consistency of a transaction, 
+if it's inconsistent, MCMC walk will traverse back to last consistent transaction and continue there,
+which means this branch will become smaller over time and less likely to get approved. 
+Therefore they will have no other options but to reattach their transactions in order to get them confirmed.
+
+## Promotion
+
+Compared to reattaching a pending transaction, promotion is a rather different
+approach. It is a process to create a zero-value transaction which
+references the pending transaction and the latest milestone. _Figure 2_ represents the promotion of a transaction on the Tangle.
+
+<Image
+src={`/static/docs/promotion_reattachment/promotion_simple.svg`}
+width="100"
+height="65"
+caption="Figure 2: Promotion of a transaction on the Tangle"
+/>
+
+As shown in _Figure 2_, **A'** is a zero-value transaction that is sent to the Tangle 
+with one tip pointing to **A** and the other tip 
+pointing to the latest milestone. Promotion can be done multiple times, in _Figure 2_, 
+if we promote **A** again by creating **A''**, it will
+**possibly** directly aprrove **A'** (depend whether **A'** has other transactions pointing to it) 
+and indirectly aprrove **A**. Under both cases, the cumulative weight of **A** is increased, 
+thus improving the chance of it to be confirmed.
+
+In order to promote transaction **A**, you can call 
+_[promoteTransaction](https://github.com/iotaledger/iota.js/tree/master#promotetransaction)_ method from javascript library.
+
+```javascript
+iota.api.promoteTransaction(tail, depth, minWeightMagnitude, transfers [, params], callback)
+```
+
+The _tail_ hash of **A** passed in will become the reference hash when the library internally calls _getTransactionsToApprove_,
+which is essentially the method to point the tips of **A'** to **A** and **latest milestone**.
+
+The method _promoteTransaction_ internally calls _[isPromotable](https://github.com/iotaledger/iota.js/tree/master#ispromotable)_ 
+with the _tail hash_ to verify whether the transaction bundle identified by the _tail hash_ is consistent or not. 
+The reason that the transaction **A** is inconsistent can be, e.g. **A** is directly or indirectly referencing an invalid transaction.
+
+<Image
+src={`/static/docs/promotion_reattachment/promotion_variant.svg`}
+width="100"
+height="50"
+caption="Figure 3: Variant of the promotion of a transaction on the Tangle"
+/>
+
+_Figure 3_ shows that the pending transaction **A** and the latest milestone can also be **indirectly referenced**,
+since the Tangle needs to perform a MCMC walk to select tips to be the reference
+of the newly created zero-value transaction **A'**. 
+
+It seems promotion is a better approach compared to reattachment, as you can do it as often as possible and it doesn't hurt the Tangle.
+However there are situations that promotion won't help. 
+
+* If the pending transaction is already
+referencing an inconsistent transaction, (e.g. **double-spending transaction**), it doesn't matter how many time you promote that
+transaction **A**, it won't get approved. The only **solution is to reattach that transaction, let it reference new valid tips**.
+
+* Another scenario that we need to choose reattachment over promotion is that transaction **A** is too old, 
+with **max depth** specified, MCMC walk can't find tips for **A'** and the Tangle will return an error when you call _promoteTransaction_.
+
+## Conclusion
+
+Both promotion and reattachment can be used when dealing with a pending transaction. Promotion unlike reattachment 
+can be performed as many time as possible, it won't hurt the Tangle. However under some scenarios,
+only reattachment can make a pending transaction confirmed by the Tangle.
+
